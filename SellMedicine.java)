@@ -1,0 +1,258 @@
+package pharmacy.system;
+
+import javax.swing.*;
+import javax.swing.table.DefaultTableModel;
+import java.awt.*;
+import java.sql.*;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+
+public class SellMedicine extends JFrame {
+    private int userId;
+    private JComboBox<String> medicineComboBox;
+    private JTextField quantityField;
+    private JTextField customerNameField;
+    private JTextField customerPhoneField;
+    private JButton addToCartButton;
+    private JButton sellButton;
+    private JButton backButton;
+    private JTable cartTable;
+    private DefaultTableModel cartModel;
+    
+    public SellMedicine(int userId) {
+        this.userId = userId;
+        setTitle("Sell Medicine - Pharmacy Management System");
+        setSize(800, 600);
+        setLocationRelativeTo(null);
+        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        
+        JPanel inputPanel = new JPanel(new GridLayout(4, 2, 10, 10));
+        inputPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        
+        inputPanel.add(new JLabel("Customer Name:"));
+        customerNameField = new JTextField();
+        inputPanel.add(customerNameField);
+        
+        inputPanel.add(new JLabel("Customer Phone:"));
+        customerPhoneField = new JTextField();
+        inputPanel.add(customerPhoneField);
+        
+        inputPanel.add(new JLabel("Select Medicine:"));
+        medicineComboBox = new JComboBox<>();
+        loadMedicines();
+        inputPanel.add(medicineComboBox);
+        
+        inputPanel.add(new JLabel("Quantity:"));
+        quantityField = new JTextField();
+        inputPanel.add(quantityField);
+        
+        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.CENTER));
+        addToCartButton = new JButton("Add to Cart");
+        sellButton = new JButton("Sell");
+        backButton = new JButton("Back");
+        
+        buttonPanel.add(addToCartButton);
+        buttonPanel.add(sellButton);
+        buttonPanel.add(backButton);
+        
+        Object[] columnNames = {"Medicine Name", "Quantity", "Price per Unit", "Total Price"};
+        cartModel = new DefaultTableModel(columnNames, 0);
+        cartTable = new JTable(cartModel);
+        
+        JScrollPane tableScrollPane = new JScrollPane(cartTable);
+        
+        addToCartButton.addActionListener(e -> addToCart());
+        sellButton.addActionListener(e -> sellMedicine());
+        backButton.addActionListener(e -> {
+            this.dispose();
+            new PharmacistDashboard(userId, "Pharmacist", "Pharmacist");
+        });
+        
+        JPanel mainPanel = new JPanel(new BorderLayout(10, 10));
+        mainPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        mainPanel.add(inputPanel, BorderLayout.NORTH);
+        mainPanel.add(buttonPanel, BorderLayout.SOUTH);
+        
+        JPanel centerPanel = new JPanel(new BorderLayout());
+        centerPanel.add(tableScrollPane, BorderLayout.CENTER);
+        mainPanel.add(centerPanel, BorderLayout.CENTER);
+        
+        add(mainPanel);
+        setVisible(true);
+    }
+    
+    private void loadMedicines() {
+        try {
+            Connection conn = DatabaseConnection.getConnection();
+            String sql = "SELECT medicine_id, medicine_name, price_per_unit, quantity FROM medicines WHERE quantity > 0";
+            Statement stmt = conn.createStatement();
+            ResultSet rs = stmt.executeQuery(sql);
+            
+            medicineComboBox.removeAllItems();
+            
+            while (rs.next()) {
+                String item = rs.getString("medicine_name") + " (ID: " + rs.getInt("medicine_id") + 
+                            ", Price: ₹" + rs.getDouble("price_per_unit") + ", Stock: " + rs.getInt("quantity");
+                medicineComboBox.addItem(item);
+            }
+            
+            conn.close();
+        } catch (SQLException ex) {
+            ex.printStackTrace();
+        }
+    }
+    
+    private void addToCart() {
+        if (medicineComboBox.getSelectedItem() == null) {
+            JOptionPane.showMessageDialog(this, "Please select a medicine!", "Error", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+        
+        String quantityText = quantityField.getText();
+        if (quantityText.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "Please enter quantity!", "Error", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+        
+        try {
+            int quantity = Integer.parseInt(quantityText);
+            String selected = medicineComboBox.getSelectedItem().toString();
+            String medicineName = selected.split(",")[0];
+            
+            Connection conn = DatabaseConnection.getConnection();
+            String sql = "SELECT medicine_id, price_per_unit, quantity FROM medicines WHERE medicine_name = ?";
+            PreparedStatement pst = conn.prepareStatement(sql);
+            pst.setString(1, medicineName);
+            ResultSet rs = pst.executeQuery();
+            
+            if (rs.next()) {
+                int medicineId = rs.getInt("medicine_id");
+                double pricePerUnit = rs.getDouble("price_per_unit");
+                int availableStock = rs.getInt("quantity");
+                
+                if (quantity > availableStock) {
+                    JOptionPane.showMessageDialog(this, "Not enough stock! Available: " + availableStock, "Error", JOptionPane.ERROR_MESSAGE);
+                    conn.close();
+                    return;
+                }
+                
+                double totalPrice = quantity * pricePerUnit;
+                cartModel.addRow(new Object[]{medicineName, quantity, pricePerUnit, totalPrice});
+                
+                JOptionPane.showMessageDialog(this, "Added to cart!", "Success", JOptionPane.INFORMATION_MESSAGE);
+                quantityField.setText("");
+            }
+            
+            conn.close();
+        } catch (Exception ex) {
+            ex.printStackTrace();
+            JOptionPane.showMessageDialog(this, "Invalid quantity!", "Error", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+    
+    private void sellMedicine() {
+        if (customerNameField.getText().isEmpty() || customerPhoneField.getText().isEmpty()) {
+            JOptionPane.showMessageDialog(this, "Please enter customer details!", "Error", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+        
+        if (cartModel.getRowCount() == 0) {
+            JOptionPane.showMessageDialog(this, "Cart is empty!", "Error", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+        
+        try {
+            Connection conn = DatabaseConnection.getConnection();
+            
+            // Add customer
+            String customerSql = "INSERT INTO customers (customer_name, phone) VALUES (?, ?)";
+            PreparedStatement customerPst = conn.prepareStatement(customerSql, Statement.RETURN_GENERATED_KEYS);
+            customerPst.setString(1, customerNameField.getText());
+            customerPst.setString(2, customerPhoneField.getText());
+            customerPst.executeUpdate();
+            
+            ResultSet rs = customerPst.getGeneratedKeys();
+            int customerId = 0;
+            if (rs.next()) {
+                customerId = rs.getInt(1);
+            }
+            
+            // Generate bill number
+            String billNumber = "BILL" + new SimpleDateFormat("yyyyMMddHHmmss").format(new Date());
+            
+            // Calculate totals
+            double totalAmount = 0;
+            for (int i = 0; i < cartModel.getRowCount(); i++) {
+                totalAmount += (Double) cartModel.getValueAt(i, 3);
+            }
+            
+            // Add bill
+            String billSql = "INSERT INTO bills (bill_number, customer_id, user_id, total_amount, discount, final_amount, payment_method) VALUES (?, ?, ?, ?, ?, ?, ?)";
+            PreparedStatement billPst = conn.prepareStatement(billSql, Statement.RETURN_GENERATED_KEYS);
+            billPst.setString(1, billNumber);
+            billPst.setInt(2, customerId);
+            billPst.setInt(3, userId);
+            billPst.setDouble(4, totalAmount);
+            billPst.setDouble(5, 0);
+            billPst.setDouble(6, totalAmount);
+            billPst.setString(7, "Cash");
+            billPst.executeUpdate();
+            
+            ResultSet billRs = billPst.getGeneratedKeys();
+            int billId = 0;
+            if (billRs.next()) {
+                billId = billRs.getInt(1);
+            }
+            
+            // Add bill details and update stock
+            for (int i = 0; i < cartModel.getRowCount(); i++) {
+                String medicineName = (String) cartModel.getValueAt(i, 0);
+                int quantity = (Integer) cartModel.getValueAt(i, 1);
+                double pricePerUnit = (Double) cartModel.getValueAt(i, 2);
+                double totalPrice = (Double) cartModel.getValueAt(i, 3);
+                
+                // Get medicine_id
+                String medSql = "SELECT medicine_id FROM medicines WHERE medicine_name = ?";
+                PreparedStatement medPst = conn.prepareStatement(medSql);
+                medPst.setString(1, medicineName);
+                ResultSet medRs = medPst.executeQuery();
+                
+                int medicineId = 0;
+                if (medRs.next()) {
+                    medicineId = medRs.getInt("medicine_id");
+                }
+                
+                // Add bill detail
+                String detailSql = "INSERT INTO bill_details (bill_id, medicine_id, medicine_name, quantity_sold, price_per_unit, total_price) VALUES (?, ?, ?, ?, ?, ?)";
+                PreparedStatement detailPst = conn.prepareStatement(detailSql);
+                detailPst.setInt(1, billId);
+                detailPst.setInt(2, medicineId);
+                detailPst.setString(3, medicineName);
+                detailPst.setInt(4, quantity);
+                detailPst.setDouble(5, pricePerUnit);
+                detailPst.setDouble(6, totalPrice);
+                detailPst.executeUpdate();
+                
+                // Update stock
+                String updateSql = "UPDATE medicines SET quantity = quantity - ? WHERE medicine_id = ?";
+                PreparedStatement updatePst = conn.prepareStatement(updateSql);
+                updatePst.setInt(1, quantity);
+                updatePst.setInt(2, medicineId);
+                updatePst.executeUpdate();
+            }
+            
+            JOptionPane.showMessageDialog(this, "Sale completed successfully!\nBill Number: " + billNumber, "Success", JOptionPane.INFORMATION_MESSAGE);
+            
+            // Clear cart
+            cartModel.setRowCount(0);
+            customerNameField.setText("");
+            customerPhoneField.setText("");
+            loadMedicines();
+            
+            conn.close();
+        } catch (SQLException ex) {
+            ex.printStackTrace();
+            JOptionPane.showMessageDialog(this, "Error completing sale: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+}
